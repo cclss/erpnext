@@ -78,9 +78,10 @@ each of the three parts, and how to run the build harness and the preview server
 on their own — useful when you want to look at the preview yourself rather than
 assert on it.
 
-Two things the run leaves behind: the temporary bench tree (under the system
-temp directory, printed in the report — delete it when you are done with it),
-and nothing else. This checkout's `../erpnext/public` is never written to.
+The run cleans up after itself: the temporary bench tree is removed when the
+scenario ends, and this checkout's `../erpnext/public` is never written to. One
+exception — if the isolated build fails, the tree is kept so the build log the
+report names can be read, and the reported bench root is yours to delete.
 
 ### Reading a failure
 
@@ -113,9 +114,10 @@ the page was served and the assertion says what was missing from it.
 ## Continuous integration
 
 `.github/workflows/banking-tests.yml` runs exactly the two commands above, in
-that order, on every pull request and push that touches `banking/`. It installs
-with the committed lockfile and uses the Node version this README requires, so a
-green run there means the same two commands are green on a clean checkout.
+that order, on every pull request that touches `banking/`, and on pushes to
+`develop` and `version-*`. It installs with the committed lockfile and uses the
+Node version this README requires, so a green run there means the same two
+commands are green on a clean checkout.
 
 ## React Compiler
 
