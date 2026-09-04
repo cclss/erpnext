@@ -1,0 +1,53 @@
+name: Banking Tests
+
+on:
+  pull_request:
+    paths:
+      - 'banking/**'
+      - '.github/workflows/banking-tests.yml'
+  push:
+    branches:
+      - develop
+      - 'version-*'
+    paths:
+      - 'banking/**'
+      - '.github/workflows/banking-tests.yml'
+
+concurrency:
+  group: banking-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  banking-tests:
+    name: unit and E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: banking
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # The app's tooling and tests are TypeScript that Node runs directly,
+      # which needs Node's built-in type stripping.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: banking/yarn.lock
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Unit tests
+        run: yarn test
+
+      # SC-1: builds in a throwaway bench tree that has no
+      # sites/common_site_config.json, serves the result, and opens it.
+      - name: End-to-end (preview entry)
+        run: yarn test:e2e

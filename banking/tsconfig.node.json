@@ -3,7 +3,8 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "target": "ES2023",
     "lib": [
-      "ES2023"
+      "ES2023",
+      "DOM"
     ],
     "module": "ESNext",
     "types": [
@@ -23,6 +24,10 @@
     "noUncheckedSideEffectImports": true
   },
   "include": [
-    "vite.config.ts"
+    "vite.config.ts",
+    "proxyOptions.ts",
+    "vite.config.test.ts",
+    "proxyOptions.test.ts",
+    "e2e/**/*.ts"
   ]
 }

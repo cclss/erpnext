@@ -7,6 +7,10 @@
     "dev": "vite",
     "build": "vite build --base=/assets/erpnext/banking/ && yarn copy-html-entry",
     "lint": "eslint .",
+    "test": "node --test",
+    "test:e2e": "node --test --test-concurrency=1 e2e/previewEntry.scenario.ts",
+    "e2e:isolated-build": "node e2e/isolatedBuild.ts",
+    "e2e:preview-server": "node e2e/previewServer.ts",
     "preview": "vite preview",
     "copy-html-entry": "cp ../erpnext/public/banking/index.html ../erpnext/www/banking.html"
   },
@@ -52,6 +56,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^25.3.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -59,6 +64,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^16.5.0",
+    "jsdom": "^30.0.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.67.0"
   }
