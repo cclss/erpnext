@@ -133,9 +133,12 @@ production build, and `yarn test` has to stay fast enough to run on every edit.
 
 Each address is opened in its own process, so those are three runs of the bundle
 rather than one run navigating between screens — which is what a direct visit and
-a reload are. The judgement value is the `Failures:` line each open prints; a
-passing run prints `Failures: (none)` three times, and a failing one lists what
-was refused under `Failed requests:` in the report.
+a reload are. A passing run is silent: each open reports to the scenario rather
+than to the terminal. A failing one prints that open's report as the assertion
+message, and the value to read there is `Failed requests:` — what the address
+asked for and the status it came back with. To see the same report on a passing
+open, run `renderPage.ts` yourself as shown below; its `Failures:` line is
+`(none)` when the address got everything it asked for.
 
 The bar there is zero refused requests, not few: each open counts what it
 watched — the route chunks the router pulled in behind that address, the boot
