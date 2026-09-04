@@ -11,7 +11,11 @@ writes to `../erpnext/public/banking` and copies its HTML entry to
   `vite.config.ts`, `proxyOptions.ts`, the tests, and everything under `e2e/` —
   is TypeScript that Node runs directly, which needs Node's built-in type
   stripping. Older Node cannot run `yarn test` or `yarn test:e2e`.
-- **Yarn 1 (classic)**, matching the `yarn.lock` in this directory.
+- **Yarn 1 (classic)**, matching the `yarn.lock` in this directory. Every yarn
+  command prints one `DEP0169` deprecation warning before it runs anything.
+  It comes from yarn's own bundled CLI, not from this app or its dependencies:
+  `yarn node -e "0"` prints it, running `node --test` directly prints none.
+  Nothing in this directory can silence it; a newer yarn would.
 - Dependencies installed from this directory:
 
 ```sh
@@ -37,6 +41,22 @@ The dev server proxies the backend routes (`/app`, `/api`, `/assets`, `/files`,
 missing or unreadable, the dev server prints one warning naming the cause and
 starts **without** a proxy rather than forwarding to a guessed port; set
 `VITE_PROXY_PORT` to point it at a backend explicitly.
+
+### Environment variables
+
+The app reads four `VITE_` variables. Only the first is set in this repository —
+no script, workflow or bench hook here injects the other three, so each one falls
+back to a value the app or its backend already knows.
+
+| Variable | Set by | Unset means |
+|---|---|---|
+| `VITE_BASE_NAME` | `.env.production` in this directory, so `yarn build` picks it up and `yarn dev` does not | the router mounts at the site root instead of under `/banking` |
+| `VITE_SITE_NAME` | nobody; it is a fallback | the site name comes from the boot payload bench renders into the page |
+| `VITE_SOCKET_PORT` | nobody; pass it yourself when the bench runs socketio off its default port | the Frappe SDK connects on its own default, port `9000` |
+| `VITE_PROXY_PORT` | nobody; pass it yourself to the dev server | the proxy port comes from `webserver_port`, as described above |
+
+The last one is read only when serving. The other three are compiled into the
+bundle, so changing one requires a rebuild.
 
 ## Tests
 
