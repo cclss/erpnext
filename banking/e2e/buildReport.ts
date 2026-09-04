@@ -28,8 +28,8 @@ export const LABEL_SUFFIX = ':';
  */
 export const FAILURE_MARKER = 'build_failed';
 
-/** The stage a failure belongs to, from tree preparation to serving the artefacts. */
-export type FailureStage = 'prepare' | 'install' | 'build' | 'verify' | 'serve';
+/** The stage a failure belongs to, from tree preparation to opening the served page. */
+export type FailureStage = 'prepare' | 'install' | 'build' | 'verify' | 'serve' | 'render';
 
 /** One `label: value` line of a report. */
 export interface ReportDetail {

@@ -73,3 +73,53 @@ into looking like data — every list is empty, every count is zero.
 A page that cannot be rendered — a missing entry, a placeholder the stub does
 not model — is reported as one `build_failed` block and exits non-zero, the same
 way the build harness reports.
+
+---
+
+# SC-1 — opening the preview
+
+The two halves above are means, not the end. What the story claims is that a
+preview built without `sites/common_site_config.json` **opens the Banking
+screen** — so the scenario builds, serves, opens the served page, and looks at
+what the application rendered.
+
+```sh
+yarn test:e2e
+```
+
+There is no separate runner configuration: the scenario is a `node:test` file,
+and the flags it needs live in the `test:e2e` script. It is named
+`previewEntry.scenario.ts` rather than `*.test.ts` on purpose — it costs a
+production build, and `yarn test` has to stay fast enough to run on every edit.
+
+## What it asserts
+
+| Step | Assertion |
+|---|---|
+| Build in a tree with no site config | the harness exits `0`; a failure is reported as `build_failed` and ends the run |
+| `GET /banking` | `200`, no leftover template placeholders, and not the `build_failed` screen |
+| Every asset the page loads | `200` and non-empty, and the served entry module is byte-identical to the built one |
+| Open the page | the application mounts, and its breadcrumb landmark reads `Banking` |
+
+## Opening the page without a browser
+
+The page is opened in this process: the served HTML becomes a DOM, the built
+entry module is imported into it, and the application runs. No browser is
+launched and no browser automation tool is installed — the production bundle is
+an ES module, so Node can execute it once it has a DOM to render into. What that
+buys is a check that fails for the same reasons a browser would: a bundle that
+throws on load, a page that mounts nothing, a screen that renders and then
+disappears.
+
+Two consequences worth knowing:
+
+- **The screen has to survive, not just appear.** The application renders before
+  its data arrives, so the scenario waits after the first render and reports the
+  settled screen. A page that flashes and blanks fails, and the report quotes
+  the error that took it down.
+- **Layout is not evaluated.** Nothing here checks pixels, sizes or what a
+  viewport would hide; the assertion is that the application is on the page, in
+  the DOM the accessibility tree reads.
+
+A failure is reported in the same shape as the rest of the harness — stage,
+cause, page errors, what was rendered instead, the fix, and the impact.

@@ -24,6 +24,13 @@ test('empty answers keep the shape each caller iterates over', () => {
 	});
 });
 
+test('the bank account list answers with a list, because the entry screen maps over it', () => {
+	assert.deepEqual(
+		stubApiResponse('/api/method/erpnext.accounts.doctype.bank_account.bank_account.get_list').body,
+		{ message: [] }
+	);
+});
+
 test('an unmodelled method still answers, so no call turns into an error banner', () => {
 	const response = stubApiResponse(
 		'/api/method/erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool.get_linked_payments'

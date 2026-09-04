@@ -34,10 +34,13 @@ const EMPTY_REPORT = {
  *
  * A count must be a number, a report must have `result`/`columns` arrays to map
  * over, and the translation dictionary must be an object the page can spread.
- * Everything else is a method the entry screen does not depend on, so `null`
- * is both minimal and honest.
+ * The bank account list is here because the entry screen maps over it the
+ * moment it renders: answering `null` there does not leave the screen empty,
+ * it takes the screen down. Everything else is a method the entry screen does
+ * not reach, so `null` is both minimal and honest.
  */
 const METHOD_RESPONSES: Record<string, unknown> = {
+	'erpnext.accounts.doctype.bank_account.bank_account.get_list': [],
 	'frappe.client.get_count': 0,
 	'frappe.client.get_list': [],
 	'frappe.client.get_value': {},
