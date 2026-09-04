@@ -122,6 +122,7 @@ production build, and `yarn test` has to stay fast enough to run on every edit.
 | `GET /banking/statement-importer` and `/banking/statement-importer/<id>` | `200` and byte-identical to the page above — reloading a deep screen is not a `404` |
 | Every same-origin file the page references | `200` and non-empty, the built bundles and the shared icon alike; the served entry module is byte-identical to the built one |
 | Open the page | the application mounts, and its breadcrumb landmark reads `Banking` |
+| What the page then asks for | it asks for something, and every same-origin request it makes is answered — a `404`, a refusal or an error the page logs fails the run |
 
 The icon is checked because the entry template writes its default with a leading
 space inside the quotes (`{{ favicon or ' /assets/... ' }}`). A browser trims
@@ -147,6 +148,14 @@ Two consequences worth knowing:
 - **Layout is not evaluated.** Nothing here checks pixels, sizes or what a
   viewport would hide; the assertion is that the application is on the page, in
   the DOM the accessibility tree reads.
+- **What the page asks for is watched, not only what it draws.** The page's
+  `fetch` is the shim this harness installs, so every same-origin request and the
+  status it came back with is recorded on the way through — the lazily loaded
+  chunks the router pulls in, and the backend calls the app makes on mount. A
+  request the preview refuses leaves no mark in the DOM: the application renders
+  its empty state around a `404` exactly as it renders it around real emptiness,
+  and a check that only reads the DOM passes on a preview serving half of what
+  the page needs.
 
 A failure is reported in the same shape as the rest of the harness — stage,
 cause, page errors, what was rendered instead, the fix, and the impact.

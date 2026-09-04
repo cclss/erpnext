@@ -31,7 +31,7 @@ import { HarnessFailure, formatFailure, toArtifactPath } from './buildReport.ts'
 import { renderEntry, type RenderedEntry } from './domRuntime.ts';
 import {
 	excerpt,
-	findMissingEntrySignals,
+	findFailureSignals,
 	findModuleEntry,
 	formatEntryScreenFailure,
 	isFailureScreen
@@ -273,9 +273,21 @@ describe('SC-1 the Banking preview opens without a site config', { timeout: SETU
 		// assertions below read values, not a live DOM.
 		entry.close();
 
+		// A page that asked for nothing proves nothing about what the preview
+		// answers, so the observation has to have seen traffic before its
+		// silence about failures means anything.
+		assert.ok(
+			entry.requests.length > 0,
+			'the page made no same-origin request, so nothing was observed about what the preview answers'
+		);
+
 		// One assertion, because one list already says everything that can be
-		// wrong: nothing mounted, no breadcrumb, the wrong route, or the
-		// deployment failure screen.
-		assert.deepEqual(findMissingEntrySignals(entry), [], formatEntryScreenFailure(entry));
+		// wrong: nothing mounted, no breadcrumb, the wrong route, the deployment
+		// failure screen, a request the preview refused, or an error the page
+		// logged. The last two matter as much as the first four — an application
+		// renders its empty state around a `404` exactly as it renders it around
+		// real emptiness, so a screen that looks right is not yet a screen that
+		// got what it asked for.
+		assert.deepEqual(findFailureSignals(entry), [], formatEntryScreenFailure(entry));
 	});
 });

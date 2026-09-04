@@ -5,10 +5,14 @@ import {
 	APP_MOUNT_SELECTOR,
 	BREADCRUMB_SELECTOR,
 	ENTRY_BREADCRUMB_LABEL,
+	describeRequest,
 	excerpt,
+	findFailedRequests,
+	findFailureSignals,
 	findMissingEntrySignals,
 	findModuleEntry,
 	formatEntryScreenFailure,
+	isFailedRequest,
 	isFailureScreen,
 	type EntryObservation
 } from './entryScreen.ts';
@@ -20,6 +24,7 @@ function observation(overrides: Partial<EntryObservation> = {}): EntryObservatio
 		mountText: 'Banking Beta',
 		breadcrumbText: 'Banking Beta',
 		pageErrors: [],
+		requests: [{ url: '/api/method/frappe.client.get_list', status: 200 }],
 		waitedMs: 50,
 		...overrides
 	};
@@ -96,6 +101,133 @@ describe('findMissingEntrySignals', () => {
 	});
 });
 
+describe('isFailedRequest', () => {
+	it('accepts the answer a served file gets', () => {
+		assert.equal(isFailedRequest({ url: '/assets/erpnext/banking/assets/index.js', status: 200 }), false);
+	});
+
+	it('accepts a redirect, which is an answer that tells the page where to go instead', () => {
+		assert.equal(isFailedRequest({ url: '/', status: 302 }), false);
+	});
+
+	it('rejects the answer a path the preview does not serve gets', () => {
+		assert.equal(isFailedRequest({ url: '/api/method/banking.missing', status: 404 }), true);
+	});
+
+	it('rejects a request that never got an answer at all', () => {
+		assert.equal(isFailedRequest({ url: '/api/method/x', error: 'fetch failed' }), true);
+	});
+});
+
+describe('findFailedRequests', () => {
+	it('keeps only what the preview refused, in the order the page asked', () => {
+		const failed = findFailedRequests([
+			{ url: '/api/method/ok', status: 200 },
+			{ url: '/api/method/gone', status: 404 },
+			{ url: '/assets/erpnext/banking/assets/late.js', status: 500 }
+		]);
+		assert.deepEqual(
+			failed.map((request) => request.url),
+			['/api/method/gone', '/assets/erpnext/banking/assets/late.js']
+		);
+	});
+
+	it('finds nothing to report on a preview that answered everything', () => {
+		assert.deepEqual(findFailedRequests([{ url: '/api/method/ok', status: 200 }]), []);
+	});
+});
+
+describe('describeRequest', () => {
+	it('names the address and the status it came back with', () => {
+		assert.equal(describeRequest({ url: '/api/method/gone', status: 404 }), '/api/method/gone — answered 404');
+	});
+
+	it('says why a request got no answer instead of quoting a status it never had', () => {
+		const line = describeRequest({ url: '/api/method/x', error: 'fetch failed' });
+		assert.ok(line.includes('/api/method/x'));
+		assert.ok(line.includes('fetch failed'));
+		assert.ok(!line.includes('undefined'));
+	});
+});
+
+describe('findFailureSignals', () => {
+	it('finds nothing wrong with a screen that rendered and got every answer', () => {
+		assert.deepEqual(findFailureSignals(observation()), []);
+	});
+
+	it('reports a 404 the page received, with the address and the status', () => {
+		const signals = findFailureSignals(
+			observation({
+				requests: [
+					{ url: '/api/method/frappe.client.get_list', status: 200 },
+					{ url: '/assets/erpnext/banking/assets/chunk.js', status: 404 }
+				]
+			})
+		);
+
+		assert.equal(signals.length, 1);
+		assert.ok(signals[0].includes('/assets/erpnext/banking/assets/chunk.js'));
+		assert.ok(signals[0].includes('404'));
+	});
+
+	it('reports a request the preview never answered', () => {
+		const signals = findFailureSignals(
+			observation({ requests: [{ url: '/api/method/x', error: 'connect ECONNREFUSED' }] })
+		);
+		assert.equal(signals.length, 1);
+		assert.ok(signals[0].includes('connect ECONNREFUSED'));
+	});
+
+	it('reports what the page logged, which a rendered screen would otherwise hide', () => {
+		const signals = findFailureSignals(observation({ pageErrors: ['Warning: failed to load statements'] }));
+		assert.deepEqual(signals, ['page error — Warning: failed to load statements']);
+	});
+
+	it('carries the entry-screen signals too, so one list answers whether the preview opened', () => {
+		const signals = findFailureSignals(
+			observation({
+				mountHtml: '',
+				mountText: '',
+				breadcrumbText: undefined,
+				pageErrors: ['Uncaught TypeError: e is not a function'],
+				requests: [{ url: '/api/method/gone', status: 404 }]
+			})
+		);
+
+		assert.equal(signals.length, 4);
+		assert.ok(signals.some((signal) => signal.includes(APP_MOUNT_SELECTOR)));
+		assert.ok(signals.some((signal) => signal.includes(BREADCRUMB_SELECTOR)));
+		assert.ok(signals.some((signal) => signal.includes('/api/method/gone')));
+		assert.ok(signals.some((signal) => signal.includes('Uncaught TypeError')));
+	});
+});
+
+describe('formatEntryScreenFailure on a screen that rendered without its answers', () => {
+	const report = formatEntryScreenFailure(
+		observation({ requests: [{ url: '/api/method/banking.get_bank_transactions', status: 404 }], waitedMs: 3_000 })
+	);
+
+	it('quotes the refused address and its status, so the report names the request itself', () => {
+		assert.ok(report.includes('/api/method/banking.get_bank_transactions'));
+		assert.ok(report.includes('404'));
+	});
+
+	it('does not claim the entry screen was missing when it was on the page', () => {
+		assert.ok(!report.includes('was not on it'));
+		assert.ok(report.includes('Missing: (nothing)'));
+	});
+
+	it('states an impact that matches what actually happened', () => {
+		assert.ok(report.includes('the preview shows the Banking application'));
+	});
+
+	it('keeps the harness report shape on every line', () => {
+		for (const line of report.split('\n')) {
+			assert.ok(line.startsWith(LOG_PREFIX), `line without the source prefix: ${line}`);
+		}
+	});
+});
+
 describe('formatEntryScreenFailure', () => {
 	const report = formatEntryScreenFailure(
 		observation({
@@ -121,6 +253,10 @@ describe('formatEntryScreenFailure', () => {
 
 	it('quotes what the page reported, so the cause is in the report itself', () => {
 		assert.ok(report.includes('Uncaught TypeError: e is not a function'));
+	});
+
+	it('states that nothing was refused rather than leaving the request line out', () => {
+		assert.ok(report.includes('Failed requests: (none)'));
 	});
 
 	it('says what is still missing while the failure stands', () => {
