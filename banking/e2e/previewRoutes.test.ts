@@ -19,6 +19,19 @@ test('the app route and everything under it is the page', () => {
 	}
 });
 
+test('a document name with dots in it is a screen, not a file', () => {
+	// Frappe naming series separate their parts with dots, so this is what a
+	// shared link to an import log looks like. Read as a file name, `.1` is an
+	// extension and the address that opened a screen answers `404` instead.
+	for (const route of [
+		`${APP_ROUTE}/statement-importer/BSI.2026.1`,
+		`${APP_ROUTE}/statement-importer/ACC-BSI-2026.00001`,
+		`${APP_ROUTE}/statement-importer/BSI.2026.REVISED`
+	]) {
+		assert.deepEqual(classifyRequest(route), { kind: 'page' }, route);
+	}
+});
+
 test('a path outside the app route is not the page', () => {
 	// The built bundle never navigates here — answering with HTML would hide the
 	// fact that the caller is using the wrong base.
@@ -28,7 +41,15 @@ test('a path outside the app route is not the page', () => {
 });
 
 test('a request that names a file is never answered with the page', () => {
-	for (const route of [`${APP_ROUTE}/vite.svg`, `${APP_ROUTE}/assets/index.js`, '/favicon.ico']) {
+	// Every extension a Vite build emits, including the longest one: a bundle
+	// answered with HTML is a `200` that fails deep inside the browser instead.
+	for (const route of [
+		`${APP_ROUTE}/vite.svg`,
+		`${APP_ROUTE}/assets/index.js`,
+		`${APP_ROUTE}/assets/index-abc123.css`,
+		`${APP_ROUTE}/assets/inter.woff2`,
+		'/favicon.ico'
+	]) {
 		assert.notEqual(classifyRequest(route).kind, 'page', route);
 	}
 });

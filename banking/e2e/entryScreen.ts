@@ -81,6 +81,14 @@ export interface PageRequest {
 
 /** What the scenario saw after giving the built bundle a chance to run. */
 export interface EntryObservation {
+	/**
+	 * The address the page was opened at.
+	 *
+	 * Part of the observation because the scenario opens more than one: a report
+	 * that says a screen never came, without saying which address failed to
+	 * produce it, sends the reader to the wrong page.
+	 */
+	address: string;
 	/** Markup the application rendered into its mount point. */
 	mountHtml: string;
 	/** Text the application rendered into its mount point. */
@@ -167,6 +175,7 @@ export function formatEntryScreenFailure(observation: EntryObservation): string 
 	const missing = findMissingEntrySignals(observation);
 	const failed = findFailedRequests(observation.requests);
 	const details: ReportDetail[] = [
+		{ label: 'Address', value: observation.address },
 		{ label: 'Missing', value: missing.join(', ') || '(nothing)' },
 		{
 			label: 'Failed requests',

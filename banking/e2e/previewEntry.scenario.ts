@@ -15,26 +15,28 @@
  * type, the `/banking` the build mounts its router at, and the deep screens they
  * reload or share a link to — together with every same-origin file the page
  * pulls in on the way. A preview that only answers one of those is a preview
- * that breaks on the second click.
+ * that breaks on the second click, so each address is not merely served but
+ * opened: the bundle runs on what came back, and the screen it produced and the
+ * answers it received are read there.
  *
  * Run with `yarn test:e2e`. It is deliberately not named `*.test.ts`: it costs a
  * production build, and `yarn test` must stay fast enough to run on every edit.
  */
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { after, before, describe, it } from 'node:test';
 import { HarnessFailure, formatFailure, toArtifactPath } from './buildReport.ts';
-import { renderEntry, type RenderedEntry } from './domRuntime.ts';
 import {
 	excerpt,
 	findFailureSignals,
 	findModuleEntry,
 	formatEntryScreenFailure,
-	isFailureScreen
+	isFailureScreen,
+	type EntryObservation
 } from './entryScreen.ts';
 import { findUnresolvedPlaceholders } from './previewBoot.ts';
 import {
@@ -72,7 +74,11 @@ const DRAIN_MS = 500;
 const APP_ROUTES = [
 	APP_ROUTE,
 	`${APP_ROUTE}/statement-importer`,
-	`${APP_ROUTE}/statement-importer/BSI-2026-00001`
+	// A document name with dots in it, because that is what Frappe's naming
+	// series produce and what a shared link therefore carries. Read as a file
+	// name, `.1` is an extension, and the address answers `404` instead of the
+	// screen — the kind of break that only shows up on a real name.
+	`${APP_ROUTE}/statement-importer/BSI.2026.1`
 ];
 
 const HARNESS_DIR = import.meta.dirname;
@@ -110,6 +116,44 @@ interface ServedPage {
 	status: number;
 	html: string;
 	cookies: string[];
+}
+
+/**
+ * Opens one address the way a browser tab opens it, and reports what it rendered.
+ *
+ * A process per address, because a page is a fresh run of the bundle and Node
+ * runs a module once per process: opening the second address in this one would
+ * mount nothing, and the run would report the preview as broken for a reason
+ * that belongs entirely to the harness. `renderPage.ts` is that process, and it
+ * fetches the address itself — what is rendered is what the address serves.
+ *
+ * Waited for asynchronously, never with `spawnSync`: the preview server runs in
+ * *this* process, so blocking here would leave the page's own request for the
+ * page unanswered until it timed out.
+ */
+async function openInOwnProcess(address: string, moduleFile: string): Promise<EntryObservation> {
+	const child = spawn(
+		process.execPath,
+		[path.join(HARNESS_DIR, 'renderPage.ts'), '--url', address, '--module', moduleFile, '--json'],
+		{ cwd: APP_DIR }
+	);
+	let stdout = '';
+	let stderr = '';
+	child.stdout.setEncoding('utf8');
+	child.stderr.setEncoding('utf8');
+	child.stdout.on('data', (chunk: string) => (stdout += chunk));
+	child.stderr.on('data', (chunk: string) => (stderr += chunk));
+
+	const code = await new Promise<number | null>((resolve, reject) => {
+		child.once('error', reject);
+		child.once('close', resolve);
+	});
+	if (code !== 0) {
+		// The page harness already reported the failure in the shape this project
+		// reads; repeating it in an assertion message would only reword it.
+		throw new Error(stderr.trim() || `opening ${address} exited with code ${String(code)}`);
+	}
+	return JSON.parse(stdout) as EntryObservation;
 }
 
 /**
@@ -162,7 +206,10 @@ describe('SC-1 the Banking preview opens without a site config', { timeout: SETU
 	let artifacts: Artifacts;
 	let server: RunningPreviewServer;
 	let page: ServedPage;
-	let entry: RenderedEntry | undefined;
+
+	/** Where the build wrote the module the page loads, given the page's reference to it. */
+	const entryModuleFile = (reference: string): string =>
+		path.join(artifacts.outDir, toArtifactPath(reference, ASSET_BASE));
 
 	before(
 		() =>
@@ -180,7 +227,6 @@ describe('SC-1 the Banking preview opens without a site config', { timeout: SETU
 	);
 
 	after(async () => {
-		entry?.close();
 		await new Promise((resolve) => setTimeout(resolve, DRAIN_MS));
 		await server?.close();
 		if (artifacts?.benchRoot) {
@@ -248,46 +294,44 @@ describe('SC-1 the Banking preview opens without a site config', { timeout: SETU
 		}
 	});
 
-	it('renders the Banking application entry screen', async () => {
+	it('serves the entry module the build produced', async () => {
 		const reference = findModuleEntry(page.html);
 		assert.ok(reference, 'the served page loads no entry module, so nothing would ever mount');
 
-		const moduleFile = path.join(artifacts.outDir, toArtifactPath(reference, ASSET_BASE));
 		const served = await fetch(new URL(reference, server.url));
+
 		assert.equal(
 			await served.text(),
-			readFileSync(moduleFile, 'utf8'),
+			readFileSync(entryModuleFile(reference), 'utf8'),
 			'the preview serves a different entry module than the build produced'
 		);
+	});
 
-		entry = await reported(() =>
-			renderEntry({
-				html: page.html,
-				url: server.url,
-				cookies: page.cookies,
-				moduleFile
-			})
-		);
+	it('opens the Banking application at every address a person arrives at', async () => {
+		const origin = new URL(server.url).origin;
+		const reference = findModuleEntry(page.html);
+		assert.ok(reference, 'the served page loads no entry module, so nothing would ever mount');
+		const moduleFile = entryModuleFile(reference);
 
-		// The observation is already a snapshot, so the page can stop here — the
-		// assertions below read values, not a live DOM.
-		entry.close();
+		for (const route of APP_ROUTES) {
+			const observation = await openInOwnProcess(`${origin}${route}`, moduleFile);
 
-		// A page that asked for nothing proves nothing about what the preview
-		// answers, so the observation has to have seen traffic before its
-		// silence about failures means anything.
-		assert.ok(
-			entry.requests.length > 0,
-			'the page made no same-origin request, so nothing was observed about what the preview answers'
-		);
+			// A page that asked for nothing proves nothing about what the preview
+			// answers, so the observation has to have seen traffic before its
+			// silence about failures means anything.
+			assert.ok(
+				observation.requests.length > 0,
+				`${route} made no same-origin request, so nothing was observed about what the preview answers`
+			);
 
-		// One assertion, because one list already says everything that can be
-		// wrong: nothing mounted, no breadcrumb, the wrong route, the deployment
-		// failure screen, a request the preview refused, or an error the page
-		// logged. The last two matter as much as the first four — an application
-		// renders its empty state around a `404` exactly as it renders it around
-		// real emptiness, so a screen that looks right is not yet a screen that
-		// got what it asked for.
-		assert.deepEqual(findFailureSignals(entry), [], formatEntryScreenFailure(entry));
+			// One assertion per address, because one list already says everything
+			// that can be wrong there: nothing mounted, no breadcrumb, the wrong
+			// route, the deployment failure screen, a request the preview refused,
+			// or an error the page logged. The last two matter as much as the
+			// first four — an application renders its empty state around a `404`
+			// exactly as it renders it around real emptiness, so a screen that
+			// looks right is not yet a screen that got what it asked for.
+			assert.deepEqual(findFailureSignals(observation), [], formatEntryScreenFailure(observation));
+		}
 	});
 });

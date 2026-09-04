@@ -20,6 +20,7 @@ import {
 /** An observation of a healthy entry screen; each test spoils one part of it. */
 function observation(overrides: Partial<EntryObservation> = {}): EntryObservation {
 	return {
+		address: 'http://127.0.0.1:41234/banking',
 		mountHtml: '<div><nav aria-label="breadcrumb">Banking Beta</nav></div>',
 		mountText: 'Banking Beta',
 		breadcrumbText: 'Banking Beta',
@@ -245,6 +246,10 @@ describe('formatEntryScreenFailure', () => {
 
 	it('places the failure at the rendering stage, after building and serving succeeded', () => {
 		assert.ok(report.includes('Stage: render'));
+	});
+
+	it('names the address the screen was missing from, because more than one is opened', () => {
+		assert.ok(report.includes('Address: http://127.0.0.1:41234/banking'));
 	});
 
 	it('states how long the entry screen was waited for', () => {

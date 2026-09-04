@@ -12,12 +12,21 @@
  * as the ES module it is, with a DOM installed as the module's global scope,
  * which is what lets a check this close to a real page load stay a test.
  *
+ * One process opens one page. Node keeps a single instance of a module per URL,
+ * so a second call here would import the bundle that already ran and mount
+ * nothing, and importing it under a distinct URL instead gives the page a
+ * second copy of every module in the entry chunk while the lazily loaded chunks
+ * keep the first — react-router's context stops matching across the two. A
+ * second address is therefore opened in a second process; `./renderPage.ts` is
+ * that process.
+ *
  * What the page asks for on the way is recorded too. A request the preview
  * refuses is invisible in the DOM — the application renders around it — so the
  * observation carries the answers as well as the markup.
  */
 
-import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { DOMWindow, JSDOM } from 'jsdom';
 import { HarnessFailure } from './buildReport.ts';
 import {
@@ -83,6 +92,8 @@ export interface EntryRunOptions {
 	cookies?: string[];
 	/** Absolute path of the entry module the page loads. */
 	moduleFile: string;
+	/** The address the page loads that module from, i.e. what its `<script src>` says. */
+	moduleAddress: string;
 	/** How long to wait for the entry screen. */
 	timeoutMs?: number;
 	/** How long the entry screen must stay on before it counts as open. */
@@ -117,11 +128,61 @@ export interface RecordingFetch {
 	requests: PageRequest[];
 }
 
-/** The address a fetch argument names, or `undefined` when it points at someone else's server. */
-function sameOriginAddress(input: RequestInfo | URL, origin: string): string | undefined {
-	const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+/**
+ * Where the built bundle is: the one directory holding its chunks, named twice.
+ *
+ * Twice, because this process loads the bundle from disk while the page it is
+ * running belongs to the preview. A chunk the bundle names — by its place on
+ * disk or by the public path it would have in a browser — is the same chunk the
+ * preview serves out of that directory.
+ */
+export interface BundleLocation {
+	/** Directory the chunks are imported from. */
+	directory: string;
+	/** Public directory the preview serves those same chunks from, with its trailing slash. */
+	base: string;
+}
+
+/** Where the entry module sits, given both of its addresses. */
+export function locateBundle(moduleFile: string, moduleAddress: string): BundleLocation {
+	return {
+		directory: path.dirname(path.resolve(moduleFile)),
+		base: moduleAddress.slice(0, moduleAddress.lastIndexOf('/') + 1)
+	};
+}
+
+/**
+ * The URL a request carries once it is put back on the page's own origin.
+ *
+ * Both translations undo something this process did, not something the page
+ * did. A relative address gets the origin the page was served from, because
+ * Node's fetch rejects what a browser resolves without thinking about it.
+ *
+ * And a `file:` address for one of the bundle's own chunks gets the address the
+ * preview serves that chunk at. The bundle is imported from disk, so its
+ * `import.meta.url` is a file URL, and Vite's module preloader resolves each
+ * chunk against it — the public path `/assets/…/chunk.js` comes back as
+ * `file:///assets/…/chunk.js`, and a chunk named by its place on disk comes
+ * back as the path it was read from. In a browser both are the preview's own
+ * address, and asking the preview for them is what the page is really doing.
+ *
+ * Anything else is returned as it was: a `file:` path outside the bundle and an
+ * address on somebody else's server are both requests this preview has no
+ * answer for, and rewriting them would hide that.
+ */
+export function pageAddress(raw: string, origin: string, bundle?: BundleLocation): URL {
 	const url = new URL(raw, origin);
-	return url.origin === origin ? `${url.pathname}${url.search}` : undefined;
+	if (url.protocol !== 'file:' || bundle === undefined) {
+		return url;
+	}
+	if (url.pathname.startsWith(bundle.base)) {
+		return new URL(`${url.pathname}${url.search}`, origin);
+	}
+	const relative = path.relative(bundle.directory, fileURLToPath(url));
+	if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+		return url;
+	}
+	return new URL(`${bundle.base}${relative.split(path.sep).join('/')}${url.search}`, origin);
 }
 
 /**
@@ -138,14 +199,22 @@ function sameOriginAddress(input: RequestInfo | URL, origin: string): string | u
  * answer is recorded as the path the page asked for rather than the absolute
  * URL, because the port the preview happened to get is not part of the fact.
  *
+ * What the page asks for is what {@link pageAddress} says it asked for: the
+ * addresses a browser would have derived, rather than the ones this process's
+ * way of loading the bundle produced.
+ *
  * The answer is recorded but never changed: failures propagate to the page, so
  * the application handles them exactly as it would in a browser.
  */
-export function createRecordingFetch(send: typeof fetch, origin: string): RecordingFetch {
+export function createRecordingFetch(send: typeof fetch, origin: string, bundle?: BundleLocation): RecordingFetch {
 	const requests: PageRequest[] = [];
 	const fetchThroughPreview: typeof fetch = async (input, init) => {
-		const target = typeof input === 'string' ? new URL(input, origin) : input;
-		const address = sameOriginAddress(input, origin);
+		// A `Request` carries a method, headers and a body; only the addresses
+		// the page hands over as text are ours to resolve.
+		const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+		const url = pageAddress(raw, origin, bundle);
+		const address = url.origin === origin ? `${url.pathname}${url.search}` : undefined;
+		const target = typeof input === 'string' || input instanceof URL ? url : input;
 		try {
 			const response = await send(target, init);
 			if (address !== undefined) {
@@ -259,6 +328,7 @@ function delay(ms: number): Promise<void> {
 
 function observe(
 	window: DOMWindow,
+	address: string,
 	waitedMs: number,
 	pageErrors: string[],
 	requests: PageRequest[]
@@ -266,6 +336,7 @@ function observe(
 	const mount = window.document.querySelector(APP_MOUNT_SELECTOR);
 	const breadcrumb = window.document.querySelector(BREADCRUMB_SELECTOR);
 	return {
+		address,
 		mountHtml: mount?.innerHTML ?? '',
 		mountText: mount?.textContent ?? '',
 		breadcrumbText: breadcrumb?.textContent ?? undefined,
@@ -304,7 +375,11 @@ export async function renderEntry(options: EntryRunOptions): Promise<RenderedEnt
 	// Captured before the DOM shadows the global, so the shim cannot recurse.
 	const nodeFetch = globalThis.fetch;
 	const origin = new URL(options.url).origin;
-	const { fetch: fetchThroughPreview, requests } = createRecordingFetch(nodeFetch, origin);
+	const { fetch: fetchThroughPreview, requests } = createRecordingFetch(
+		nodeFetch,
+		origin,
+		locateBundle(options.moduleFile, options.moduleAddress)
+	);
 
 	const dom = new Dom(options.html, {
 		url: options.url,
@@ -348,7 +423,10 @@ export async function renderEntry(options: EntryRunOptions): Promise<RenderedEnt
 
 	const startedAt = Date.now();
 	let waited = 0;
-	while (observe(dom.window, waited, pageErrors, requests).breadcrumbText === undefined && waited < timeoutMs) {
+	while (
+		observe(dom.window, options.url, waited, pageErrors, requests).breadcrumbText === undefined &&
+		waited < timeoutMs
+	) {
 		await delay(POLL_INTERVAL_MS);
 		waited = Date.now() - startedAt;
 	}
@@ -356,5 +434,5 @@ export async function renderEntry(options: EntryRunOptions): Promise<RenderedEnt
 	// The screen appeared; now let it prove it stays. Reporting the settled
 	// state is what keeps a render that crashes on its first data from passing.
 	await delay(options.settleMs ?? DEFAULT_SETTLE_MS);
-	return { ...observe(dom.window, Date.now() - startedAt, pageErrors, requests), close };
+	return { ...observe(dom.window, options.url, Date.now() - startedAt, pageErrors, requests), close };
 }

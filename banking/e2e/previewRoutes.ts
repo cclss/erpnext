@@ -60,14 +60,32 @@ export type PreviewRoute =
 	| { kind: 'unserved' };
 
 /**
+ * The shape of a file extension, as opposed to a dot inside a name.
+ *
+ * A file extension names a *type*: it starts with a letter and is a short
+ * alphanumeric word — `.js`, `.css`, `.svg`, `.woff2`, the longest this build
+ * emits. What follows the last dot of a document name is not a type: Frappe
+ * naming series separate their parts with dots, so `BSI.2026.1` ends in a
+ * number and a renamed document can end in anything at all.
+ *
+ * Everything that does not look like a type is therefore treated as part of a
+ * name. The two mistakes are not equal: answering a document address with a
+ * `404` loses the screen a person opened, while answering an unreferenced file
+ * address with the page costs nothing — nothing links to it.
+ */
+const FILE_EXTENSION_PATTERN = /^\.[a-z][a-z0-9]{0,4}$/i;
+
+/**
  * True when the last path segment names a file rather than a route.
  *
  * `/banking/statement-importer` is a screen; `/banking/vite.svg` is a file that
  * this server does not have. Both live under the app route, and only the second
- * one must not be answered with the page.
+ * one must not be answered with the page. A dot alone does not decide it —
+ * `/banking/statement-importer/BSI.2026.1` is a document, and a screen.
  */
 function namesFile(pathname: string): boolean {
-	return path.extname(pathname.slice(pathname.lastIndexOf('/') + 1)) !== '';
+	const segment = pathname.slice(pathname.lastIndexOf('/') + 1);
+	return FILE_EXTENSION_PATTERN.test(path.extname(segment));
 }
 
 /** True for the app's own client-side routes, i.e. what the page's router can render. */
