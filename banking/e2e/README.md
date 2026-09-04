@@ -126,8 +126,23 @@ production build, and `yarn test` has to stay fast enough to run on every edit.
 | `GET /` | `302` to `/banking`, and following it lands on that same page |
 | `GET /banking/statement-importer` and `/banking/statement-importer/BSI.2026.1` | `200` and byte-identical to the page above — reloading a deep screen is not a `404` |
 | Every same-origin file the page references | `200` and non-empty, the built bundles and the shared icon alike; the served entry module is byte-identical to the built one |
-| Open each of the three addresses | the address answers with the page rather than a Not Found or a `build_failed` screen, the application mounts on it, and its breadcrumb landmark reads `Banking` |
-| What each page then asks for | it asks for something, and every same-origin request it makes is answered — a `404`, a refusal or an error the page logs fails the run |
+| Open `/banking` | the address answers with the page rather than a Not Found or a `build_failed` screen, the application mounts, and the breadcrumb landmark it renders carries `Banking` |
+| Open `/banking/statement-importer` | the same, at the address a reload of the importer arrives at |
+| Open `/banking/statement-importer/BSI.2026.1` | the same again, on a document name whose dots are not a file extension — the address a shared link carries |
+| What each of them asked for | it asks for something, and every same-origin request it made was answered: a `404`, a request that got no answer, or an error the page logged fails the run, on any of the three |
+
+Each address is opened in its own process, so those are three runs of the bundle
+rather than one run navigating between screens — which is what a direct visit and
+a reload are. The judgement value is the `Failures:` line each open prints; a
+passing run prints `Failures: (none)` three times, and a failing one lists what
+was refused under `Failed requests:` in the report.
+
+The bar there is zero refused requests, not few: each open counts what it
+watched — the route chunks the router pulled in behind that address, the boot
+call the app made on mount — and a single one of them answered `404` fails the
+address it was asked for. Which screen each address is supposed to land on is in
+`../README.md`'s route table; this table only says that it arrived, mounted, and
+got what it asked for.
 
 The icon is checked because the entry template writes its default with a leading
 space inside the quotes (`{{ favicon or ' /assets/... ' }}`). A browser trims

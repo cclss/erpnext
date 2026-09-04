@@ -82,8 +82,8 @@ Two commands, with different costs. Run the first constantly, the second before
 you push.
 
 ```sh
-yarn test       # unit tests, no build      (~2s)
-yarn test:e2e   # SC-1, builds and serves   (~10s)
+yarn test       # unit tests, no build      (~6s)
+yarn test:e2e   # SC-1, builds and serves   (~30s)
 ```
 
 ### Unit tests
@@ -110,10 +110,12 @@ In one run it:
 3. checks the addresses in the route table above: `/` moves to `/banking`, each
    screen answers a reload with the app page, and every same-origin file the
    page references — the bundles and the shared favicon alike — is served;
-4. opens the served page in an in-process DOM, imports the built entry module,
-   and waits for the screen to settle;
-5. asserts that the application mounted and its breadcrumb landmark reads
-   `Banking`.
+4. opens each of those addresses in a process of its own — the served page in an
+   in-process DOM, with the built entry module imported into it — and waits for
+   each screen to settle;
+5. asserts that the application mounted on every one of them, that the
+   breadcrumb landmark it rendered carries `Banking`, and that every same-origin
+   request each page made was answered rather than refused.
 
 No browser and no browser automation tool is involved. `e2e/README.md` describes
 each of the three parts, and how to run the build harness and the preview server
