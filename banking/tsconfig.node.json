@@ -26,6 +26,7 @@
     "vite.config.ts",
     "proxyOptions.ts",
     "vite.config.test.ts",
-    "proxyOptions.test.ts"
+    "proxyOptions.test.ts",
+    "e2e/**/*.ts"
   ]
 }
