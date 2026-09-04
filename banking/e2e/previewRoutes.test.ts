@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { APP_ROUTE, ASSET_BASE, classifyRequest, SOCKET_ROUTE } from './previewRoutes.ts';
+import { APP_ROUTE, ASSET_BASE, SHARED_ASSET_BASE, classifyRequest, SOCKET_ROUTE } from './previewRoutes.ts';
 
 test('the site root sends the client to the address the app is built for', () => {
 	assert.deepEqual(classifyRequest('/'), { kind: 'redirect', location: APP_ROUTE });
@@ -38,6 +38,25 @@ test('built assets are claimed by their public base', () => {
 	// Claimed by base, not by what is on disk: a missing bundle must stay a
 	// question about a bundle rather than becoming a page.
 	assert.deepEqual(classifyRequest(`${ASSET_BASE}assets/does-not-exist.js`), { kind: 'asset' });
+});
+
+test('the shared tree the build output lives in is its own kind of asset', () => {
+	// The page links to this favicon and the app loads its bank logos from the
+	// same tree; they are bench's files, served from a different directory than
+	// anything this build produced.
+	for (const route of [
+		`${SHARED_ASSET_BASE}images/erpnext-favicon.svg`,
+		`${SHARED_ASSET_BASE}images/bank-logos/hdfc.png`
+	]) {
+		assert.deepEqual(classifyRequest(route), { kind: 'shared-asset' }, route);
+	}
+});
+
+test('the build output keeps its own base inside the shared one', () => {
+	// `/assets/erpnext/banking/` is a prefix of `/assets/erpnext/`; matching the
+	// wider base first would send every bundle looking in the wrong directory.
+	assert.ok(ASSET_BASE.startsWith(SHARED_ASSET_BASE), 'the build output is served from inside the shared tree');
+	assert.deepEqual(classifyRequest(`${ASSET_BASE}assets/index-abc123.js`), { kind: 'asset' });
 });
 
 test('backend calls are claimed before any page rule can reach them', () => {

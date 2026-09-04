@@ -55,6 +55,7 @@ interface Artifacts {
 	benchRoot: string;
 	outDir: string;
 	webEntry: string;
+	sharedAssets: string;
 }
 
 /**
@@ -119,6 +120,7 @@ describe('SC-1 the Banking preview opens without a site config', { timeout: SETU
 				server = await startPreviewServer({
 					outDir: artifacts.outDir,
 					webEntry: artifacts.webEntry,
+					sharedAssets: artifacts.sharedAssets,
 					port: EPHEMERAL_PORT
 				});
 				page = await openPreview(server.url);

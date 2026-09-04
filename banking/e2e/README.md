@@ -15,9 +15,12 @@ yarn e2e:isolated-build --json     # artefact paths on stdout, report on stderr
 ## What it does
 
 1. Copies the app into `{tmp}/apps/erpnext/banking`, the depth a bench checkout
-   has, and creates the `erpnext/public` and `erpnext/www` directories the build
-   writes into. `sites/` is never created, and its absence is asserted before
-   and after the build.
+   has, copies the erpnext app's `public/` tree beside it — the shared icons and
+   logos the page and the app load by absolute path — and creates the
+   `erpnext/www` directory the HTML entry is copied into. The build's own output
+   directory is excluded from that copy, so a previous build's files can never
+   stand in for this one's. `sites/` is never created, and its absence is
+   asserted before and after the build.
 2. Provides dependencies — by symlinking this checkout's `node_modules`, or by
    installing a fresh set with `--install`.
 3. Runs the app's own `yarn build` (`vite build --base=/assets/erpnext/banking/`
@@ -41,7 +44,7 @@ can actually be opened without a Frappe backend.
 
 ```sh
 node e2e/isolatedBuild.ts --json > report.json
-yarn e2e:preview-server --artifacts report.json          # or: --out-dir <dir> --web-entry <file>
+yarn e2e:preview-server --artifacts report.json          # or: --out-dir <dir> --web-entry <file> [--shared-assets <dir>]
 yarn e2e:preview-server --artifacts report.json --port 5173 --host 0.0.0.0
 ```
 
@@ -53,10 +56,18 @@ ignored).
 
 | Route | Response |
 |---|---|
-| `/banking`, `/`, other extensionless paths | the HTML entry, rendered |
+| `/banking` and its client-side routes | the HTML entry, rendered |
+| `/` | `302` to `/banking`, the address the built router is mounted at |
 | `/assets/erpnext/banking/*` | the built bundles, from the output directory |
+| `/assets/erpnext/*` | the shared icons and logos, from the copied `erpnext/public` |
 | `/api/*` | an empty payload in the envelope the API client expects |
+| `/socket.io` | `501` in plain text — there is no realtime backend to reach |
 | anything else | `404` |
+
+Each rule has its own directory and its own refusal, so a wrong path stays a
+question about the thing that was asked for: a missing bundle is a `404` about a
+bundle, a missing icon a `404` about an icon, and neither is ever answered with
+the page. Paths that try to leave their directory get a `403`.
 
 In a bench, `erpnext/www/banking.html` is a Jinja template — the web server
 fills `boot`, `csrf_token`, `lang`, `layout_direction`, `app_name` and `favicon`

@@ -37,6 +37,20 @@ import {
 /** Public base path of the built assets, as bench serves them. */
 const BASE = '/assets/erpnext/banking/';
 
+/**
+ * The erpnext app's shared public tree in this checkout.
+ *
+ * Bench serves it at `/assets/erpnext/`, and the page links to its favicon
+ * while the app loads bank logos from it. The build writes *into* this
+ * directory (`../erpnext/public/banking`), so the isolated tree needs a copy of
+ * it for the same reason it needs the build output: without it the preview
+ * answers a request the page really makes with a 404.
+ */
+const SHARED_ASSETS_SOURCE = path.resolve(import.meta.dirname, '..', '..', 'erpnext', 'public');
+
+/** The one directory under the shared tree the build owns; a stale copy would mask a failed build. */
+const BUILD_OUTPUT_NAME = 'banking';
+
 /** Where this app sits inside a bench: `{bench}/apps/{app}/banking`. */
 const APP_PATH_IN_BENCH = path.join('apps', 'erpnext', 'banking');
 
@@ -51,6 +65,8 @@ const APP_DIR = path.resolve(import.meta.dirname, '..');
 interface Artifacts {
 	benchRoot: string;
 	appDir: string;
+	/** The copied shared tree, served at `/assets/erpnext/`. Contains {@link Artifacts.outDir}. */
+	sharedAssets: string;
 	outDir: string;
 	htmlEntry: string;
 	webEntry: string;
@@ -68,7 +84,7 @@ function fail(
 }
 
 /** Builds the bench-shaped tree. `sites/` is deliberately never created. */
-function prepareBenchTree(): { benchRoot: string; appDir: string; erpnextDir: string } {
+function prepareBenchTree(): { benchRoot: string; appDir: string; erpnextDir: string; sharedAssets: string } {
 	const buildScript = readPackageBuildScript();
 	if (!buildScript.includes(`--base=${BASE}`)) {
 		fail(
@@ -90,11 +106,38 @@ function prepareBenchTree(): { benchRoot: string; appDir: string; erpnextDir: st
 	});
 	// The build writes to `../erpnext/public/banking` and the HTML entry is
 	// copied into `../erpnext/www`; both live outside the app directory.
-	mkdirSync(path.join(erpnextDir, 'public'), { recursive: true });
+	const sharedAssets = copySharedAssets(erpnextDir);
 	mkdirSync(path.join(erpnextDir, 'www'), { recursive: true });
 
 	assertNoSiteConfig(benchRoot, 'prepare');
-	return { benchRoot, appDir, erpnextDir };
+	return { benchRoot, appDir, erpnextDir, sharedAssets };
+}
+
+/**
+ * Copies the erpnext app's shared public tree into the isolated bench.
+ *
+ * Everything except the build output directory is copied: that one the build
+ * produces itself, and carrying a previous build's files into the tree would
+ * let a build that emitted nothing still pass verification.
+ */
+function copySharedAssets(erpnextDir: string): string {
+	if (!existsSync(SHARED_ASSETS_SOURCE)) {
+		fail(
+			'prepare',
+			'this checkout has no erpnext public assets to copy into the isolated tree',
+			'run the harness from a full app checkout, where the erpnext app sits beside this one',
+			[{ label: 'Expected directory', value: SHARED_ASSETS_SOURCE }]
+		);
+	}
+
+	const target = path.join(erpnextDir, 'public');
+	const buildOutput = path.join(SHARED_ASSETS_SOURCE, BUILD_OUTPUT_NAME);
+	mkdirSync(target, { recursive: true });
+	cpSync(SHARED_ASSETS_SOURCE, target, {
+		recursive: true,
+		filter: (source) => source !== buildOutput
+	});
+	return target;
 }
 
 function readPackageBuildScript(): string {
@@ -176,10 +219,16 @@ function runBuild(appDir: string, benchRoot: string): string {
 }
 
 /** Checks that the build produced what a preview deployment would serve. */
-function verifyArtifacts(benchRoot: string, appDir: string, erpnextDir: string, buildLog: string): Artifacts {
+function verifyArtifacts(
+	benchRoot: string,
+	appDir: string,
+	sharedAssets: string,
+	erpnextDir: string,
+	buildLog: string
+): Artifacts {
 	assertNoSiteConfig(benchRoot, 'verify');
 
-	const outDir = path.join(erpnextDir, 'public', 'banking');
+	const outDir = path.join(sharedAssets, BUILD_OUTPUT_NAME);
 	const htmlEntry = path.join(outDir, 'index.html');
 	const webEntry = path.join(erpnextDir, 'www', 'banking.html');
 
@@ -213,14 +262,15 @@ function verifyArtifacts(benchRoot: string, appDir: string, erpnextDir: string, 
 		]);
 	}
 
-	return { benchRoot, appDir, outDir, htmlEntry, webEntry, assets, buildLog };
+	return { benchRoot, appDir, sharedAssets, outDir, htmlEntry, webEntry, assets, buildLog };
 }
 
 function successDetails(artifacts: Artifacts): ReportDetail[] {
 	const details: ReportDetail[] = [
 		{ label: 'Bench root', value: artifacts.benchRoot },
 		{ label: 'HTML entry', value: artifacts.htmlEntry },
-		{ label: 'Web entry', value: artifacts.webEntry }
+		{ label: 'Web entry', value: artifacts.webEntry },
+		{ label: 'Shared assets', value: artifacts.sharedAssets }
 	];
 	const script = artifacts.assets.find((asset) => asset.endsWith('.js'));
 	const style = artifacts.assets.find((asset) => asset.endsWith('.css'));
@@ -244,7 +294,7 @@ function main(argv: string[]): number {
 		benchRoot = tree.benchRoot;
 		provideDependencies(tree.appDir, tree.benchRoot, install);
 		const buildLog = runBuild(tree.appDir, tree.benchRoot);
-		const artifacts = verifyArtifacts(tree.benchRoot, tree.appDir, tree.erpnextDir, buildLog);
+		const artifacts = verifyArtifacts(tree.benchRoot, tree.appDir, tree.sharedAssets, tree.erpnextDir, buildLog);
 
 		const report = formatSuccess({
 			isolation: `the bench tree had no ${SITE_CONFIG_PATH_IN_BENCH}`,

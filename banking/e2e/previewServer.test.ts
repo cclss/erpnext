@@ -5,11 +5,21 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import { HarnessFailure } from './buildReport.ts';
 import { findUnresolvedPlaceholders } from './previewBoot.ts';
-import { APP_ROUTE, ASSET_BASE, startPreviewServer, type RunningPreviewServer } from './previewServer.ts';
+import {
+	APP_ROUTE,
+	ASSET_BASE,
+	SHARED_ASSET_BASE,
+	startPreviewServer,
+	type RunningPreviewServer
+} from './previewServer.ts';
 
 const SCRIPT_ASSET = 'assets/index-preview.js';
 const STYLE_ASSET = 'assets/index-preview.css';
 const SCRIPT_BODY = 'console.log("banking preview bundle");\n';
+
+/** The icon the entry template falls back to when a site sets no favicon of its own. */
+const FAVICON_ASSET = 'images/erpnext-favicon.svg';
+const FAVICON_BODY = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"></svg>\n';
 
 const temporaryRoots: string[] = [];
 const runningServers: RunningPreviewServer[] = [];
@@ -23,18 +33,24 @@ after(async () => {
 
 /**
  * Writes what a successful build leaves behind: hashed bundles under the output
- * directory, and the HTML entry copied to `erpnext/www/banking.html` with its
- * Jinja placeholders still unrendered. The entry is derived from the app's own
+ * directory, the erpnext app's shared assets in the tree that contains it, and
+ * the HTML entry copied to `erpnext/www/banking.html` with its Jinja
+ * placeholders still unrendered. The entry is derived from the app's own
  * `index.html`, so the fixture cannot drift away from the real template.
  */
-function createArtifacts(): { outDir: string; webEntry: string } {
+function createArtifacts(): { outDir: string; webEntry: string; sharedAssets: string } {
 	const root = mkdtempSync(path.join(tmpdir(), 'banking-preview-server-'));
 	temporaryRoots.push(root);
 
-	const outDir = path.join(root, 'public', 'banking');
+	// The output directory sits inside the shared tree, exactly as
+	// `erpnext/public/banking` sits inside `erpnext/public` in a bench.
+	const sharedAssets = path.join(root, 'public');
+	const outDir = path.join(sharedAssets, 'banking');
 	mkdirSync(path.join(outDir, 'assets'), { recursive: true });
 	writeFileSync(path.join(outDir, SCRIPT_ASSET), SCRIPT_BODY, 'utf8');
 	writeFileSync(path.join(outDir, STYLE_ASSET), ':root { --preview: 1 }\n', 'utf8');
+	mkdirSync(path.join(sharedAssets, path.dirname(FAVICON_ASSET)), { recursive: true });
+	writeFileSync(path.join(sharedAssets, FAVICON_ASSET), FAVICON_BODY, 'utf8');
 
 	const built = readFileSync(new URL('../index.html', import.meta.url), 'utf8').replace(
 		'<script type="module" src="/src/main.tsx"></script>',
@@ -48,7 +64,7 @@ function createArtifacts(): { outDir: string; webEntry: string } {
 	writeFileSync(webEntry, built, 'utf8');
 	writeFileSync(path.join(outDir, 'index.html'), built, 'utf8');
 
-	return { outDir, webEntry };
+	return { outDir, webEntry, sharedAssets };
 }
 
 /** Starts a server on an ephemeral port so the suite never collides with a real preview. */
@@ -113,6 +129,73 @@ test('every asset the rendered page references is actually served', async () => 
 		await response.arrayBuffer();
 		assert.equal(response.status, 200, reference);
 	}
+});
+
+test('the icon the page links to is served from the shared tree', async () => {
+	const server = await startFixtureServer();
+
+	const response = await fetch(`${server.origin}${SHARED_ASSET_BASE}${FAVICON_ASSET}`);
+	const body = await response.text();
+
+	assert.equal(response.status, 200);
+	assert.equal(body, FAVICON_BODY);
+	// A favicon served as `application/octet-stream` is downloaded, not drawn.
+	assert.match(response.headers.get('content-type') ?? '', /image\/svg\+xml/);
+});
+
+test('every shared asset the rendered page references is actually served', async () => {
+	const server = await startFixtureServer();
+
+	const html = await (await fetch(`${server.origin}${APP_ROUTE}`)).text();
+	// The template's favicon default carries a leading space inside its quotes,
+	// which a browser strips before requesting — so the fixture strips it too.
+	const references = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
+		.map((match) => match[1].trim())
+		.filter((reference) => reference.startsWith(SHARED_ASSET_BASE) && !reference.startsWith(ASSET_BASE));
+
+	assert.ok(references.length > 0, 'the entry template references shared assets, starting with its icon');
+	for (const reference of references) {
+		const response = await fetch(`${server.origin}${reference}`);
+		await response.arrayBuffer();
+		assert.equal(response.status, 200, reference);
+	}
+});
+
+test('a shared asset that does not exist is a 404', async () => {
+	const server = await startFixtureServer();
+
+	const response = await fetch(`${server.origin}${SHARED_ASSET_BASE}images/no-such-logo.png`);
+	const body = await response.text();
+
+	assert.equal(response.status, 404);
+	assert.ok(!body.includes('<html'), 'a missing icon must not be answered with the page');
+});
+
+test('a shared asset path cannot escape the shared directory', async () => {
+	const server = await startFixtureServer();
+
+	for (const suffix of ['..%2fwww%2fbanking.html', '%2e%2e%2fwww%2fbanking.html']) {
+		const response = await fetch(`${server.origin}${SHARED_ASSET_BASE}${suffix}`);
+		const body = await response.text();
+
+		assert.equal(response.status, 403, suffix);
+		assert.ok(!body.includes('<html'), 'no file outside the shared directory may be returned');
+	}
+});
+
+test('a preview started without shared assets says so instead of pretending', async () => {
+	const { outDir, webEntry } = createArtifacts();
+	const running = await startPreviewServer({ outDir, webEntry, port: 0 });
+	runningServers.push(running);
+
+	const response = await fetch(`http://${running.host}:${String(running.port)}${SHARED_ASSET_BASE}${FAVICON_ASSET}`);
+	const body = await response.text();
+
+	assert.equal(response.status, 404);
+	assert.match(response.headers.get('content-type') ?? '', /text\/plain/);
+	// The reason names the preview's own configuration: the icon is missing from
+	// this server, not from the app.
+	assert.match(body, /shared asset/);
 });
 
 test('a missing asset is a 404, not the page pretending to be a bundle', async () => {

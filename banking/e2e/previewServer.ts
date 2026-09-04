@@ -3,7 +3,8 @@
  *
  * `yarn e2e:isolated-build` proves the app *builds* without bench's site
  * config. This serves what that build produced, the way bench serves it — the
- * page at `/banking`, its bundles under `/assets/erpnext/banking/` — so the
+ * page at `/banking`, its bundles under `/assets/erpnext/banking/`, and the
+ * erpnext app's shared icons and logos under `/assets/erpnext/` — so the
  * preview can be opened and the Banking screen looked at, instead of a
  * deployment failure screen.
  *
@@ -15,7 +16,7 @@
  *
  * Usage:
  *   node e2e/previewServer.ts --artifacts <build-report.json>
- *   node e2e/previewServer.ts --out-dir <dir> --web-entry <file> [--port n] [--host h]
+ *   node e2e/previewServer.ts --out-dir <dir> --web-entry <file> [--shared-assets <dir>] [--port n] [--host h]
  *
  * The artefacts file is what `yarn e2e:isolated-build --json` prints, so the
  * two halves of the harness compose without repeating any path.
@@ -27,7 +28,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { HarnessFailure, formatFailure, formatReport, type ReportDetail } from './buildReport.ts';
 import { stubApiResponse } from './previewApi.ts';
-import { APP_ROUTE, ASSET_BASE, classifyRequest } from './previewRoutes.ts';
+import { APP_ROUTE, ASSET_BASE, SHARED_ASSET_BASE, classifyRequest } from './previewRoutes.ts';
 import {
 	PREVIEW_USER,
 	UnknownPlaceholderError,
@@ -39,7 +40,7 @@ import {
 
 // Re-exported so callers of this server get its addresses from the server
 // itself, while the routing rules stay in one testable place.
-export { APP_ROUTE, ASSET_BASE } from './previewRoutes.ts';
+export { APP_ROUTE, ASSET_BASE, SHARED_ASSET_BASE } from './previewRoutes.ts';
 
 /** Default port, following Vite's preview convention. */
 export const DEFAULT_PORT = 4173;
@@ -74,6 +75,14 @@ export interface PreviewServerOptions {
 	outDir: string;
 	/** The HTML entry bench would render, i.e. the copied `banking.html`. */
 	webEntry: string;
+	/**
+	 * The erpnext app's `public/` directory, served under
+	 * {@link SHARED_ASSET_BASE}. This is where the favicon the page links to and
+	 * the bank logos the app loads actually live — they are bench's assets, not
+	 * this build's output. Omitting it leaves those requests answered as
+	 * unserved rather than guessed at.
+	 */
+	sharedAssets?: string;
 	port?: number;
 	host?: string;
 }
@@ -147,18 +156,18 @@ function renderEntry(webEntry: string): string {
 	return html;
 }
 
-function assertOutDir(outDir: string): void {
+function assertDirectory(directory: string, what: string, impact: string): void {
 	try {
-		if (!statSync(outDir).isDirectory()) {
+		if (!statSync(directory).isDirectory()) {
 			throw new Error('not a directory');
 		}
 	} catch (error) {
 		fail(
 			'verify',
-			`the build output directory is unusable (${(error as Error).message})`,
+			`the ${what} directory is unusable (${(error as Error).message})`,
 			'run `yarn e2e:isolated-build --json` first and pass its report with --artifacts',
-			[{ label: 'Expected directory', value: outDir }],
-			'the page would load without its bundles and render nothing'
+			[{ label: 'Expected directory', value: directory }],
+			impact
 		);
 	}
 }
@@ -203,42 +212,59 @@ function sendPage(response: ServerResponse, html: string): void {
 	response.end(html);
 }
 
+/** A directory of files and the public base it answers to. */
+interface AssetRoot {
+	/** Directory on disk. `undefined` when this preview was started without one. */
+	directory: string | undefined;
+	/** Public base the request paths carry. */
+	base: string;
+	/** What these files are, used in the one-line refusals. */
+	what: string;
+}
+
 /**
- * Resolves an asset request to a file inside the build output.
+ * Resolves an asset request to a file inside its own root.
  *
- * Returns `undefined` for anything that escapes the output directory: the
- * request path is attacker-controlled input, and `..` in it must never be able
- * to read the rest of the filesystem.
+ * Returns `undefined` for anything that escapes that root: the request path is
+ * attacker-controlled input, and `..` in it must never be able to read the rest
+ * of the filesystem — including the sibling directories of a root that happens
+ * to sit inside another one.
  */
-function resolveAsset(outDir: string, pathname: string): string | undefined {
+function resolveAsset(directory: string, base: string, pathname: string): string | undefined {
 	let relative: string;
 	try {
-		relative = decodeURIComponent(pathname.slice(ASSET_BASE.length));
+		relative = decodeURIComponent(pathname.slice(base.length));
 	} catch {
 		return undefined;
 	}
 	if (relative === '' || relative.includes('\0')) {
 		return undefined;
 	}
-	const resolved = path.resolve(outDir, relative);
-	const root = path.resolve(outDir);
+	const resolved = path.resolve(directory, relative);
+	const root = path.resolve(directory);
 	if (resolved !== root && !resolved.startsWith(root + path.sep)) {
 		return undefined;
 	}
 	return resolved;
 }
 
-function serveAsset(outDir: string, pathname: string, response: ServerResponse): void {
-	const file = resolveAsset(outDir, pathname);
+function serveAsset(root: AssetRoot, pathname: string, response: ServerResponse): void {
+	if (root.directory === undefined) {
+		// Better a stated absence than a silent one: the caller learns the file
+		// is missing from this preview's configuration, not from the app.
+		sendText(response, 404, `the preview was started without a ${root.what} directory, so ${pathname} is not served`);
+		return;
+	}
+	const file = resolveAsset(root.directory, root.base, pathname);
 	if (!file) {
-		sendText(response, 403, 'asset path escapes the build output directory');
+		sendText(response, 403, `asset path escapes the ${root.what} directory`);
 		return;
 	}
 	let contents: Buffer;
 	try {
 		contents = readFileSync(file);
 	} catch {
-		sendText(response, 404, `no built asset at ${pathname}`);
+		sendText(response, 404, `no ${root.what} at ${pathname}`);
 		return;
 	}
 	response.writeHead(200, {
@@ -255,7 +281,11 @@ function serveAsset(outDir: string, pathname: string, response: ServerResponse):
  * `./previewRoutes.ts` and tested there without a socket; this function only
  * turns that decision into bytes.
  */
-function handle(options: { outDir: string; html: string }, request: IncomingMessage, response: ServerResponse): void {
+function handle(
+	options: { outDir: string; sharedAssets: string | undefined; html: string },
+	request: IncomingMessage,
+	response: ServerResponse
+): void {
 	const { pathname, search } = new URL(request.url ?? '/', 'http://preview.invalid');
 	const method = request.method ?? 'GET';
 	const route = classifyRequest(pathname);
@@ -281,7 +311,17 @@ function handle(options: { outDir: string; html: string }, request: IncomingMess
 			sendText(response, 501, `the preview has no realtime backend behind ${pathname}`);
 			return;
 		case 'asset':
-			serveAsset(options.outDir, pathname, response);
+			serveAsset({ directory: options.outDir, base: ASSET_BASE, what: 'built asset' }, pathname, response);
+			return;
+		case 'shared-asset':
+			// Bench serves these from the erpnext app itself; the page links to
+			// its favicon and the app loads bank logos from here, so a preview
+			// that only serves its own output shows a broken icon it did not break.
+			serveAsset(
+				{ directory: options.sharedAssets, base: SHARED_ASSET_BASE, what: 'shared asset' },
+				pathname,
+				response
+			);
 			return;
 		case 'redirect':
 			sendRedirect(response, `${route.location}${search}`);
@@ -290,7 +330,7 @@ function handle(options: { outDir: string; html: string }, request: IncomingMess
 			sendPage(response, options.html);
 			return;
 		case 'unserved':
-			sendText(response, 404, `the preview serves ${APP_ROUTE} and ${ASSET_BASE}, not ${pathname}`);
+			sendText(response, 404, `the preview serves ${APP_ROUTE} and ${SHARED_ASSET_BASE}, not ${pathname}`);
 			return;
 	}
 }
@@ -303,13 +343,21 @@ function handle(options: { outDir: string; html: string }, request: IncomingMess
  */
 export async function startPreviewServer(options: PreviewServerOptions): Promise<RunningPreviewServer> {
 	const outDir = path.resolve(options.outDir);
+	const sharedAssets = options.sharedAssets === undefined ? undefined : path.resolve(options.sharedAssets);
 	const html = renderEntry(path.resolve(options.webEntry));
-	assertOutDir(outDir);
+	assertDirectory(outDir, 'build output', 'the page would load without its bundles and render nothing');
+	if (sharedAssets !== undefined) {
+		assertDirectory(
+			sharedAssets,
+			'shared asset',
+			'the page would load without the icons and logos it references'
+		);
+	}
 
 	const host = options.host ?? DEFAULT_HOST;
 	const requestedPort = options.port ?? DEFAULT_PORT;
 	const server = createServer((request, response) => {
-		handle({ outDir, html }, request, response);
+		handle({ outDir, sharedAssets, html }, request, response);
 	});
 
 	const port = await new Promise<number>((resolve, reject) => {
@@ -400,8 +448,8 @@ function extractJson(contents: string): string {
 }
 
 /** Reads the paths from the build harness report, so neither half repeats the other's layout. */
-function readArtifacts(file: string): { outDir: string; webEntry: string } {
-	let parsed: { outDir?: unknown; webEntry?: unknown };
+function readArtifacts(file: string): { outDir: string; webEntry: string; sharedAssets: string } {
+	let parsed: { outDir?: unknown; webEntry?: unknown; sharedAssets?: unknown };
 	try {
 		parsed = JSON.parse(extractJson(readFileSync(file, 'utf8')));
 	} catch (error) {
@@ -413,16 +461,16 @@ function readArtifacts(file: string): { outDir: string; webEntry: string } {
 			'the preview server did not start'
 		);
 	}
-	if (typeof parsed.outDir !== 'string' || typeof parsed.webEntry !== 'string') {
+	if (typeof parsed.outDir !== 'string' || typeof parsed.webEntry !== 'string' || typeof parsed.sharedAssets !== 'string') {
 		fail(
 			'prepare',
-			'the artefacts report has no outDir/webEntry paths',
-			'pass the JSON printed by `yarn e2e:isolated-build --json`',
+			'the artefacts report has no outDir/webEntry/sharedAssets paths',
+			'pass the JSON printed by a current `yarn e2e:isolated-build --json`; a report from an older harness is missing paths this server serves',
 			[{ label: 'Report', value: file }],
 			'the preview server did not start'
 		);
 	}
-	return { outDir: parsed.outDir, webEntry: parsed.webEntry };
+	return { outDir: parsed.outDir, webEntry: parsed.webEntry, sharedAssets: parsed.sharedAssets };
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -431,10 +479,18 @@ function parseArgs(argv: string[]): CliOptions {
 	const host = readFlag(argv, '--host');
 	const outDir = readFlag(argv, '--out-dir');
 	const webEntry = readFlag(argv, '--web-entry');
+	const sharedAssets = readFlag(argv, '--shared-assets');
 
 	if (artifacts) {
 		const paths = readArtifacts(artifacts);
-		return { ...paths, outDir: outDir ?? paths.outDir, webEntry: webEntry ?? paths.webEntry, port, host, artifacts };
+		return {
+			outDir: outDir ?? paths.outDir,
+			webEntry: webEntry ?? paths.webEntry,
+			sharedAssets: sharedAssets ?? paths.sharedAssets,
+			port,
+			host,
+			artifacts
+		};
 	}
 	if (!outDir || !webEntry) {
 		fail(
@@ -445,15 +501,22 @@ function parseArgs(argv: string[]): CliOptions {
 			'the preview server did not start'
 		);
 	}
-	return { outDir, webEntry, port, host };
+	return { outDir, webEntry, sharedAssets, port, host };
 }
 
 /** The one block this process prints while it runs: what is up, where, and on what terms. */
 export function formatReadyNotice(running: RunningPreviewServer, options: PreviewServerOptions): string {
+	const origin = `http://${running.host}:${String(running.port)}`;
 	return formatReport('Preview server ready', 'the isolated build is being served with a signed-in boot stub', [
 		{ label: 'App', value: running.url },
-		{ label: 'Assets', value: `http://${running.host}:${String(running.port)}${ASSET_BASE}` },
+		{ label: 'Assets', value: `${origin}${ASSET_BASE}` },
+		...(options.sharedAssets === undefined
+			? []
+			: [{ label: 'Shared assets', value: `${origin}${SHARED_ASSET_BASE}` }]),
 		{ label: 'Serving', value: path.resolve(options.outDir) },
+		...(options.sharedAssets === undefined
+			? []
+			: [{ label: 'Shared from', value: path.resolve(options.sharedAssets) }]),
 		{ label: 'Page', value: path.resolve(options.webEntry) },
 		{
 			label: 'Stubbed',
