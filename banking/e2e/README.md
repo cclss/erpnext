@@ -56,18 +56,27 @@ ignored).
 
 | Route | Response |
 |---|---|
-| `/banking` and its client-side routes | the HTML entry, rendered |
 | `/` | `302` to `/banking`, the address the built router is mounted at |
+| `/banking`, `/banking/statement-importer`, `/banking/statement-importer/<id>` | the HTML entry, rendered; the router renders the screen from the address |
+| `/banking/<name>.<ext>` | `404` — a path that names a file is never answered with the page |
 | `/assets/erpnext/banking/*` | the built bundles, from the output directory |
 | `/assets/erpnext/*` | the shared icons and logos, from the copied `erpnext/public` |
 | `/api/*` | an empty payload in the envelope the API client expects |
 | `/socket.io` | `501` in plain text — there is no realtime backend to reach |
 | anything else | `404` |
 
+Everything under `/banking` that is not a file name is served the same page: the
+router is a client-side one, so a reload or a shared link has to arrive at the
+page rather than at a `404`. The addresses in the table are the built app's own —
+`.env.production` sets `VITE_BASE_NAME=banking` — which is why the site root
+moves instead of serving a second copy of the page.
+
 Each rule has its own directory and its own refusal, so a wrong path stays a
 question about the thing that was asked for: a missing bundle is a `404` about a
 bundle, a missing icon a `404` about an icon, and neither is ever answered with
-the page. Paths that try to leave their directory get a `403`.
+the page. Paths that try to leave their directory get a `403`. Pages and assets
+answer `GET` and `HEAD` only, and anything else is a `405`; the API stub answers
+`POST` too, because the app's report and search calls are POSTs.
 
 In a bench, `erpnext/www/banking.html` is a Jinja template — the web server
 fills `boot`, `csrf_token`, `lang`, `layout_direction`, `app_name` and `favicon`
@@ -109,8 +118,15 @@ production build, and `yarn test` has to stay fast enough to run on every edit.
 |---|---|
 | Build in a tree with no site config | the harness exits `0`; a failure is reported as `build_failed` and ends the run |
 | `GET /banking` | `200`, no leftover template placeholders, and not the `build_failed` screen |
-| Every asset the page loads | `200` and non-empty, and the served entry module is byte-identical to the built one |
+| `GET /` | `302` to `/banking`, and following it lands on that same page |
+| `GET /banking/statement-importer` and `/banking/statement-importer/<id>` | `200` and byte-identical to the page above — reloading a deep screen is not a `404` |
+| Every same-origin file the page references | `200` and non-empty, the built bundles and the shared icon alike; the served entry module is byte-identical to the built one |
 | Open the page | the application mounts, and its breadcrumb landmark reads `Banking` |
+
+The icon is checked because the entry template writes its default with a leading
+space inside the quotes (`{{ favicon or ' /assets/... ' }}`). A browser trims
+that before it requests the file, so the scenario trims it too — untrimmed, the
+one reference most likely to be missing would be the one never checked.
 
 ## Opening the page without a browser
 

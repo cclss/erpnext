@@ -2,8 +2,26 @@
 
 The Banking frontend: React and TypeScript, built with Vite. A production build
 writes to `../erpnext/public/banking` and copies its HTML entry to
-`../erpnext/www/banking.html`, which bench serves under
-`/assets/erpnext/banking/`.
+`../erpnext/www/banking.html`; bench serves that page at `/banking` and the
+build output under `/assets/erpnext/banking/`.
+
+## Routes
+
+`.env.production` sets `VITE_BASE_NAME=banking`, so the built router is mounted
+at `/banking` and every screen the app has lives under it.
+
+| Path | What is there |
+|---|---|
+| `/banking` | the app page, from `../erpnext/www/banking.html`; the router renders bank reconciliation here |
+| `/banking/statement-importer` | the statement importer |
+| `/banking/statement-importer/<id>` | one import log |
+| `/assets/erpnext/banking/*` | this build's output, from `../erpnext/public/banking` (the `--base` the build script passes) |
+| `/assets/erpnext/*` | the erpnext app's shared icons and logos the page loads, starting with its favicon |
+
+The screens are client-side routes: the server sends the same page for all of
+them and the router renders the screen from the address, so a reload or a shared
+link has to arrive at that page rather than at a `404`. The preview server
+mirrors these rules; `e2e/README.md` has the table it serves by.
 
 ## Requirements
 
@@ -86,11 +104,15 @@ In one run it:
 
 1. copies this app into a throwaway bench-shaped tree that has no `sites/`
    directory, and runs the real `yarn build` there;
-2. serves what that build produced, filling the HTML entry's template
-   placeholders with a signed-in stub and answering every API call empty;
-3. opens the served page in an in-process DOM, imports the built entry module,
+2. serves what that build produced the way bench serves it, filling the HTML
+   entry's template placeholders with a signed-in stub and answering every API
+   call empty;
+3. checks the addresses in the route table above: `/` moves to `/banking`, each
+   screen answers a reload with the app page, and every same-origin file the
+   page references — the bundles and the shared favicon alike — is served;
+4. opens the served page in an in-process DOM, imports the built entry module,
    and waits for the screen to settle;
-4. asserts that the application mounted and its breadcrumb landmark reads
+5. asserts that the application mounted and its breadcrumb landmark reads
    `Banking`.
 
 No browser and no browser automation tool is involved. `e2e/README.md` describes
