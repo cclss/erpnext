@@ -1,15 +1,125 @@
-# React + TypeScript + Vite
+# Banking
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The Banking frontend: React and TypeScript, built with Vite. A production build
+writes to `../erpnext/public/banking` and copies its HTML entry to
+`../erpnext/www/banking.html`, which bench serves under
+`/assets/erpnext/banking/`.
 
-Currently, two official plugins are available:
+## Requirements
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Node 24** (Node 22.18 or newer also works). The tooling in this app —
+  `vite.config.ts`, `proxyOptions.ts`, the tests, and everything under `e2e/` —
+  is TypeScript that Node runs directly, which needs Node's built-in type
+  stripping. Older Node cannot run `yarn test` or `yarn test:e2e`.
+- **Yarn 1 (classic)**, matching the `yarn.lock` in this directory.
+- Dependencies installed from this directory:
+
+```sh
+cd banking
+yarn install --frozen-lockfile
+```
+
+Nothing else is required. In particular, no bench, no site and no
+`sites/common_site_config.json`: that file is a development-only artefact of the
+dev server's proxy, and neither the build nor the tests read it.
+
+## Development
+
+```sh
+yarn dev     # dev server on :8080
+yarn build   # production build, then the HTML entry copy
+yarn lint    # ESLint
+```
+
+The dev server proxies the backend routes (`/app`, `/api`, `/assets`, `/files`,
+`/private`) to the bench web server, using the `webserver_port` in
+`sites/common_site_config.json`. That file is read only when serving. If it is
+missing or unreadable, the dev server prints one warning naming the cause and
+starts **without** a proxy rather than forwarding to a guessed port; set
+`VITE_PROXY_PORT` to point it at a backend explicitly.
+
+## Tests
+
+Two commands, with different costs. Run the first constantly, the second before
+you push.
+
+```sh
+yarn test       # unit tests, no build      (~2s)
+yarn test:e2e   # SC-1, builds and serves   (~10s)
+```
+
+### Unit tests
+
+`yarn test` runs `node --test`, which picks up every `*.test.ts` file: the proxy
+configuration, the build configuration, and the report, server and screen
+vocabulary under `e2e/`. They touch no network and produce no build output.
+
+### End-to-end: opening the preview
+
+`yarn test:e2e` runs the one scenario this app has, `e2e/previewEntry.scenario.ts`
+(SC-1): a preview built **without** `sites/common_site_config.json` opens the
+Banking screen instead of a `build_failed` deployment failure screen. It is a
+`node:test` file like any other, and it is named `*.scenario.ts` rather than
+`*.test.ts` so that `yarn test` stays fast enough to run on every edit.
+
+In one run it:
+
+1. copies this app into a throwaway bench-shaped tree that has no `sites/`
+   directory, and runs the real `yarn build` there;
+2. serves what that build produced, filling the HTML entry's template
+   placeholders with a signed-in stub and answering every API call empty;
+3. opens the served page in an in-process DOM, imports the built entry module,
+   and waits for the screen to settle;
+4. asserts that the application mounted and its breadcrumb landmark reads
+   `Banking`.
+
+No browser and no browser automation tool is involved. `e2e/README.md` describes
+each of the three parts, and how to run the build harness and the preview server
+on their own — useful when you want to look at the preview yourself rather than
+assert on it.
+
+Two things the run leaves behind: the temporary bench tree (under the system
+temp directory, printed in the report — delete it when you are done with it),
+and nothing else. This checkout's `../erpnext/public` is never written to.
+
+### Reading a failure
+
+Every failure is reported as one block, not a stack trace. It carries the
+`build_failed` marker — the same word the preview environment shows for a broken
+deployment — and names the stage it stopped at:
+
+```
+[banking] Isolated preview build failed (build_failed) — <what went wrong>.
+[banking]   Stage: build
+[banking]   Build log: /tmp/banking-isolated-bench-XXXX/build.log
+[banking]   Fix: <what to do about it>
+[banking]   Impact: <what is missing while this stands>
+```
+
+The stage tells you where to look:
+
+| Stage | It means | Look at |
+|---|---|---|
+| `prepare` | the throwaway tree could not be built, or the app's build script no longer matches what the harness verifies | the reported build script, and `e2e/isolatedBuild.ts` |
+| `install` | dependencies could not be provided to that tree | `yarn install --frozen-lockfile` in this directory |
+| `build` | `yarn build` failed there but works here — almost always a new dependency on a bench-only file | the reported build log; grep it for `ENOENT` |
+| `verify` | the build succeeded but produced no usable artefacts, or referenced assets it did not emit | the reported output directory |
+| `serve` | the artefacts exist but the page could not be served — typically a template placeholder the preview stub does not model | the reported cause, and `e2e/previewBoot.ts` |
+| `render` | the page was served but the application did not stay on screen | the report's `Page errors` and `Rendered` items |
+
+A failed assertion instead of a report means the chain got as far as the screen:
+the page was served and the assertion says what was missing from it.
+
+## Continuous integration
+
+`.github/workflows/banking-tests.yml` runs exactly the two commands above, in
+that order, on every pull request and push that touches `banking/`. It installs
+with the committed lockfile and uses the Node version this README requires, so a
+green run there means the same two commands are green on a clean checkout.
 
 ## React Compiler
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The React Compiler is not enabled in this app because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
 ## Expanding the ESLint configuration
 
