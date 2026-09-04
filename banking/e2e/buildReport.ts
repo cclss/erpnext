@@ -28,8 +28,8 @@ export const LABEL_SUFFIX = ':';
  */
 export const FAILURE_MARKER = 'build_failed';
 
-/** The stage a failure belongs to, from tree preparation to artefact checks. */
-export type FailureStage = 'prepare' | 'install' | 'build' | 'verify';
+/** The stage a failure belongs to, from tree preparation to serving the artefacts. */
+export type FailureStage = 'prepare' | 'install' | 'build' | 'verify' | 'serve';
 
 /** One `label: value` line of a report. */
 export interface ReportDetail {
@@ -50,6 +50,12 @@ export interface FailureReport {
 	/** How to get out of it. */
 	fix: string;
 	details: ReportDetail[];
+	/**
+	 * What is missing while this failure stands. Defaults to the build case —
+	 * no artefacts at all — which is wrong for a stage that failed with the
+	 * artefacts already on disk.
+	 */
+	impact?: string;
 }
 
 /** Assembles a prefixed, indented report block. Callers pass sentences without the final period. */
@@ -73,7 +79,9 @@ export function formatFailure(report: FailureReport): string {
 		{ label: 'Fix', value: report.fix },
 		{
 			label: 'Impact',
-			value: 'no preview artefacts were produced; the preview would still show the deployment failure screen'
+			value:
+				report.impact ??
+				'no preview artefacts were produced; the preview would still show the deployment failure screen'
 		}
 	]);
 }
