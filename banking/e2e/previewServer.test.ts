@@ -141,13 +141,51 @@ test('an asset path cannot escape the build output directory', async () => {
 test('client-side routes reload into the app instead of a 404', async () => {
 	const server = await startFixtureServer();
 
-	for (const route of ['/', APP_ROUTE, `${APP_ROUTE}/statement-importer`, '/statement-importer']) {
+	// The built router is mounted at `/banking` (`.env.production` sets
+	// `VITE_BASE_NAME`), so these are the addresses a reload can actually land on.
+	for (const route of [
+		APP_ROUTE,
+		`${APP_ROUTE}/statement-importer`,
+		`${APP_ROUTE}/statement-importer/BSI-1`
+	]) {
 		const response = await fetch(`${server.origin}${route}`);
 		const html = await response.text();
 
 		assert.equal(response.status, 200, route);
 		assert.match(html, /<div id="root">/, route);
 	}
+});
+
+test('the site root sends the browser to the app instead of serving a second copy of it', async () => {
+	const server = await startFixtureServer();
+
+	const response = await fetch(`${server.origin}/?from=preview`, { redirect: 'manual' });
+	await response.text();
+
+	assert.equal(response.status, 302);
+	// The query survives the move: a link into the preview must not lose it.
+	assert.equal(response.headers.get('location'), `${APP_ROUTE}?from=preview`);
+});
+
+test('a path outside the app route is a 404, not the page under the wrong base', async () => {
+	const server = await startFixtureServer();
+
+	const response = await fetch(`${server.origin}/statement-importer`);
+	const body = await response.text();
+
+	assert.equal(response.status, 404);
+	assert.ok(!body.includes('<div id="root">'), 'the page must not answer to an address the app never uses');
+});
+
+test('a realtime connection attempt is refused in plain text, not with the page', async () => {
+	const server = await startFixtureServer();
+
+	const response = await fetch(`${server.origin}/socket.io/?EIO=4&transport=polling`);
+	const body = await response.text();
+
+	assert.ok(response.status >= 400, 'the preview has no realtime backend and must say so');
+	assert.match(response.headers.get('content-type') ?? '', /text\/plain/);
+	assert.ok(!body.includes('<html'), 'socket.io must never be handed HTML');
 });
 
 test('backend calls answer with an empty payload rather than an error', async () => {

@@ -26,7 +26,8 @@ import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { HarnessFailure, formatFailure, formatReport, type ReportDetail } from './buildReport.ts';
-import { isApiPath, stubApiResponse } from './previewApi.ts';
+import { stubApiResponse } from './previewApi.ts';
+import { APP_ROUTE, ASSET_BASE, classifyRequest } from './previewRoutes.ts';
 import {
 	PREVIEW_USER,
 	UnknownPlaceholderError,
@@ -36,11 +37,9 @@ import {
 	renderPreviewHtml
 } from './previewBoot.ts';
 
-/** Where bench serves this app's page. */
-export const APP_ROUTE = '/banking';
-
-/** Public base of the built assets, matching the build script's `--base`. */
-export const ASSET_BASE = '/assets/erpnext/banking/';
+// Re-exported so callers of this server get its addresses from the server
+// itself, while the routing rules stay in one testable place.
+export { APP_ROUTE, ASSET_BASE } from './previewRoutes.ts';
 
 /** Default port, following Vite's preview convention. */
 export const DEFAULT_PORT = 4173;
@@ -185,6 +184,13 @@ function sendText(response: ServerResponse, status: number, body: string): void 
 	response.end(body);
 }
 
+function sendRedirect(response: ServerResponse, location: string): void {
+	// 302, not 301: a permanent redirect is cached by the browser for the whole
+	// origin, and the next preview on this port would inherit it.
+	response.writeHead(302, { Location: location, 'Content-Length': 0 });
+	response.end();
+}
+
 function sendPage(response: ServerResponse, html: string): void {
 	response.writeHead(200, {
 		'Content-Type': 'text/html; charset=utf-8',
@@ -243,26 +249,20 @@ function serveAsset(outDir: string, pathname: string, response: ServerResponse):
 }
 
 /**
- * True when the path should get the app page.
+ * Answers one request according to what {@link classifyRequest} says it is.
  *
- * The built app runs its router at the site root (no `VITE_BASE_NAME` is set
- * during this build), so it navigates to paths like `/` and
- * `/statement-importer` as well as the `/banking` entry. Reloading any of them
- * must return the page, while a request that names a file gets an honest 404
- * rather than HTML pretending to be a bundle.
+ * Every branch ends the response. Which branch a path takes is decided in
+ * `./previewRoutes.ts` and tested there without a socket; this function only
+ * turns that decision into bytes.
  */
-function isPageRequest(pathname: string): boolean {
-	if (pathname === '/' || pathname === APP_ROUTE || pathname.startsWith(`${APP_ROUTE}/`)) {
-		return true;
-	}
-	return !path.extname(pathname);
-}
-
 function handle(options: { outDir: string; html: string }, request: IncomingMessage, response: ServerResponse): void {
-	const { pathname } = new URL(request.url ?? '/', 'http://preview.invalid');
+	const { pathname, search } = new URL(request.url ?? '/', 'http://preview.invalid');
 	const method = request.method ?? 'GET';
+	const route = classifyRequest(pathname);
 
-	if (isApiPath(pathname)) {
+	// The stub answers POSTs too: the app's report and search calls are POSTs,
+	// so the method check below belongs to the routes a browser *navigates* to.
+	if (route.kind === 'api') {
 		const stub = stubApiResponse(pathname);
 		sendJson(response, stub.status, stub.body);
 		return;
@@ -273,17 +273,26 @@ function handle(options: { outDir: string; html: string }, request: IncomingMess
 		return;
 	}
 
-	if (pathname.startsWith(ASSET_BASE)) {
-		serveAsset(options.outDir, pathname, response);
-		return;
+	switch (route.kind) {
+		case 'socket':
+			// There is no realtime backend to reach. Saying so in plain text lets
+			// the client fail its handshake and fall silent; HTML here would be
+			// answered as if the transport had worked.
+			sendText(response, 501, `the preview has no realtime backend behind ${pathname}`);
+			return;
+		case 'asset':
+			serveAsset(options.outDir, pathname, response);
+			return;
+		case 'redirect':
+			sendRedirect(response, `${route.location}${search}`);
+			return;
+		case 'page':
+			sendPage(response, options.html);
+			return;
+		case 'unserved':
+			sendText(response, 404, `the preview serves ${APP_ROUTE} and ${ASSET_BASE}, not ${pathname}`);
+			return;
 	}
-
-	if (isPageRequest(pathname)) {
-		sendPage(response, options.html);
-		return;
-	}
-
-	sendText(response, 404, `the preview serves ${APP_ROUTE} and ${ASSET_BASE}, not ${pathname}`);
 }
 
 /**
